@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+firebase-admin
+pydantic
+python-dotenv
+easyocr
+Pillow
+python-multipart
+torch
+torchvision
