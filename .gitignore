@@ -54,4 +54,8 @@ backend_log.txt
 .idea/
 .DS_Store
 Thumbs.db
+# User Data (Biometrics)
+backend/voter_biometrics/
+backend/voter_faces/
+
 .gemini/

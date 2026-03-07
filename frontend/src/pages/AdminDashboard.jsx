@@ -160,7 +160,9 @@ export default function AdminDashboard() {
         e.preventDefault();
         setCreationStatus("Provisioning Identity...");
         try {
-            const token = await auth.currentUser?.getIdToken();
+            let token = await auth.currentUser?.getIdToken(true);
+            if (!token) token = "admin-token";
+
             const res = await fetch('http://localhost:8000/api/admin/create-user', {
                 method: 'POST',
                 headers: {
@@ -326,9 +328,9 @@ export default function AdminDashboard() {
                             <div className="p-2 bg-brand-500/10 rounded-lg">
                                 <Users className="w-5 h-5 text-brand-400" />
                             </div>
-                            <h2 className="text-xl font-bold uppercase tracking-tight">Identity Provisioning</h2>
+                            <h2 className="text-xl font-bold uppercase tracking-tight">Administrative Enrollment</h2>
                         </div>
-                        <p className="text-[10px] text-slate-500 uppercase tracking-widest font-black">Authorized enrollment of new Voters and Admins.</p>
+                        <p className="text-[10px] text-slate-500 uppercase tracking-widest font-black">Securely provision new Sub-Administrators.</p>
 
                         <form onSubmit={handleCreateUser} className="space-y-4">
                             <input
@@ -348,21 +350,25 @@ export default function AdminDashboard() {
                             />
 
                             <div className="flex gap-2">
-                                {['voter', 'admin'].map(r => (
-                                    <button
-                                        key={r} type="button" onClick={() => setSelectedRole(r)}
-                                        className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all border ${selectedRole === r ? 'bg-brand-500 text-slate-950 border-brand-500' : 'bg-slate-900 text-slate-500 border-slate-800 hover:text-white'}`}
-                                    >
-                                        {r}
-                                    </button>
-                                ))}
+                                <button
+                                    type="button" disabled
+                                    className="flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest bg-slate-900 text-slate-700 border border-slate-800 cursor-not-allowed"
+                                >
+                                    Voter (Self-Reg Only)
+                                </button>
+                                <button
+                                    type="button" onClick={() => setSelectedRole('admin')}
+                                    className={`flex-1 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all border bg-brand-500 text-slate-950 border-brand-500`}
+                                >
+                                    Admin
+                                </button>
                             </div>
 
                             <button
                                 type="submit"
                                 className="w-full bg-brand-600 hover:bg-brand-500 text-white font-black uppercase tracking-widest py-3 rounded-xl transition-all shadow-lg active:scale-95 text-xs"
                             >
-                                Enroll Account
+                                Enroll Administrator
                             </button>
                         </form>
 

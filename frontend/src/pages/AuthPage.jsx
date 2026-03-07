@@ -1,7 +1,10 @@
 import React, { useState, useRef, useEffect, useContext } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { auth, db } from '../firebase/firebaseConfig';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import {
+    createUserWithEmailAndPassword,
+    signInWithEmailAndPassword
+} from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { Shield, Fingerprint, Mail, Lock, CheckCircle, ArrowRight, Loader2, Upload, Camera, Smartphone, Key, Search } from 'lucide-react';
 import { Web3Context } from '../context/Web3Context';
@@ -26,8 +29,8 @@ const AuthPage = () => {
     const [voterCardPreview, setVoterCardPreview] = useState(null);
     const [extractedMobile, setExtractedMobile] = useState('');
     const [otp, setOtp] = useState('');
-    const [userPhotoFile, setUserPhotoFile] = useState(null);
     const [userPhotoPreview, setUserPhotoPreview] = useState(null);
+    const [userPhotoFile, setUserPhotoFile] = useState(null);
 
     // Phase Tracking (1: Aadhaar, 2: Email, 3: Face, 4: Credentials)
     const [verificationStep, setVerificationStep] = useState(1);
@@ -120,7 +123,7 @@ const AuthPage = () => {
             }
 
             setExtractedMobile(data.linkedMobile);
-            setStep(4);
+            setStep(4); // Move to OTP entry (Backend handles the SMS)
         } catch (err) {
             console.error("OCR Error:", err);
             setError(`Verification Failed: ${err.message}`);
@@ -144,27 +147,35 @@ const AuthPage = () => {
     };
 
     const handleVerifyOtp = async () => {
+        if (!otp) {
+            setError("OTP field is empty.");
+            return;
+        }
         setLoading(true);
         setError('');
         try {
+            console.log("Verifying via Backend Gateway...");
             const formData = new FormData();
             formData.append('aadhaar_number', aadhaar);
             formData.append('otp', otp);
 
             const response = await fetch(`${apiBase}/api/verify-otp`, {
                 method: 'POST',
-                body: formData,
+                body: formData
             });
 
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.detail || 'Invalid OTP');
+            if (!response.ok) {
+                const data = await response.json();
+                throw new Error(data.detail || "Invalid Verification Code.");
+            }
 
             setStep(5);
             setAadhaarVerified(true);
             setVerificationStep(mode === 'login' ? 3 : 2); // Login goes to Biometric, Signup to Email
             setError('');
         } catch (err) {
-            setError(err.message);
+            console.error("OTP Verification Error:", err);
+            setError(err.message || "Invalid Code. Please try again.");
         } finally {
             setLoading(false);
         }
@@ -652,16 +663,10 @@ const AuthPage = () => {
 
                 <div className="mt-8 text-center text-sm border-t border-slate-800/50 pt-6">
                     <p className="text-slate-400">
-                        {mode === 'login' ? (
-                            "Public registration is currently closed. Contact election authority."
-                        ) : (
-                            <>
-                                Already verified?{' '}
-                                <Link to={`/auth?role=${role}&mode=login`} className={`text-${themeColor}-400 font-bold hover:underline`}>
-                                    Login here
-                                </Link>
-                            </>
-                        )}
+                        {mode === 'login' ? "Don't have an account?" : "Already verified?"}{' '}
+                        <Link to={`/auth?role=${role}&mode=${mode === 'login' ? 'signup' : 'login'}`} className={`text-${themeColor}-400 font-bold hover:underline`}>
+                            {mode === 'login' ? 'Signup with Aadhaar' : 'Login here'}
+                        </Link>
                     </p>
                 </div>
             </div>

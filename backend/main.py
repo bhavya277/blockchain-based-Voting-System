@@ -15,6 +15,9 @@ from services.blockchain import BlockchainService
 from services.biometric_service import BiometricService
 import sys
 import random
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from web3 import Web3
 
 # Load environment variables
@@ -63,6 +66,13 @@ app.add_middleware(
 def read_root():
     return {"message": "Welcome to the SecureVote API", "docs": "/docs"}
 
+from pydantic import BaseModel
+class AdminCreateUserRequest(BaseModel):
+    email: str
+    password: str
+    aadhaar: str
+    role: str = "voter"
+
 @app.get("/.well-known/appspecific/com.chrome.devtools.json")
 def chrome_devtools_noise():
     return {}
@@ -76,15 +86,72 @@ registered_aadhaars = {} # Full Aadhaar -> email mapping (Session persistence)
 
 @app.post("/api/send-email-otp")
 async def send_email_otp(email: str = Form(...)):
-    import random
     otp = str(random.randint(100000, 999999))
     email_otp_store[email] = otp
     
-    print(f"--- EMAIL GATEWAY SIMULATION ---", flush=True)
-    print(f"To: {email}", flush=True)
-    print(f"Message: Your SecureVote Email Verification Code is {otp}.", flush=True)
-    print(f"---------------------------------", flush=True)
-    return {"status": "success", "message": f"OTP sent to {email}"}
+    success = send_real_email(
+        to_email=email,
+        subject="SecureVote: Email Verification Code",
+        body=f"Your SecureVote Email Verification Code is: {otp}. Do not share this with anyone."
+    )
+    
+    if success:
+        return {"status": "success", "message": f"OTP sent to your email ({email})"}
+    else:
+        # Fallback to terminal if SMTP not configured, but inform user
+        print(f"\n[GATEWAY ERROR] Could not send email via SMTP. Check .env credentials.")
+        print(f"To: {email} | OTP: {otp}\n")
+        return {"status": "warning", "message": "Email service down. Check terminal for OTP (Dev Mode)."}
+
+def send_real_email(to_email, subject, body):
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", 587))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASSWORD")
+
+    if not smtp_user or not smtp_pass:
+        return False
+
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = smtp_user
+        msg['To'] = to_email
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain'))
+
+        server = smtplib.SMTP(smtp_server, smtp_port)
+        server.starttls()
+        server.login(smtp_user, smtp_pass)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"SMTP Error: {e}")
+        return False
+
+def send_real_sms(to_mobile, body):
+    sid = os.getenv("TWILIO_SID")
+    token = os.getenv("TWILIO_AUTH_TOKEN")
+    from_no = os.getenv("TWILIO_PHONE_NUMBER")
+
+    if not sid or not token or not from_no:
+        return False
+
+    try:
+        from twilio.rest import Client
+        # Ensure number has +91 or + prefix
+        target = to_mobile if to_mobile.startswith("+") else (to_mobile if to_mobile.startswith("+91") else f"+91{to_mobile}")
+        client = Client(sid, token)
+        message = client.messages.create(
+            body=body,
+            from_=from_no,
+            to=target
+        )
+        return True
+    except Exception as e:
+        sys.stderr.write(f"\n[!!] TWILIO GATEWAY ERROR: {str(e)}\n")
+        sys.stderr.flush()
+        return False
 
 @app.post("/api/verify-email-otp")
 async def verify_email_otp(email: str = Form(...), otp: str = Form(...)):
@@ -258,35 +325,52 @@ async def verify_aadhaar(
             if m: mobile_no = m.group(0)
 
         if mobile_no == "Not Found":
-             print("!!! WARNING: Mobile not found in OCR text. Falling back to test placeholder.", file=sys.stderr, flush=True)
-             mobile_no = "9876541234" # Fail-safe mock for demo
+             print("!!! SECURITY REJECTION: Mobile not found in OCR text.", file=sys.stderr, flush=True)
+             raise HTTPException(
+                 status_code=400, 
+                 detail="Aadhaar Rejected: Could not find a linked mobile number on the card. Please provide a high-quality scan of a proper Aadhaar card including your phone number."
+             )
 
-        # 6. GENERATE OTP & FORCE TERMINAL PRINT (sys.stderr bypasses all buffering)
+        # 6. GENERATE BACKEND OTP (Failover)
         otp = str(random.randint(100000, 999999))
         otp_store[aadhaar_number] = otp
         
+        # Delivery 1: Physical SMS (Twilio) - Occurs immediately as a primary/secondary delivery
+        sms_success = send_real_sms(
+            to_mobile=mobile_no,
+            body=f"Your SecureVote Identity Verification Code is: {otp}. Valid for 10 minutes."
+        )
+
         sys.stderr.write("\n" + "█"*60 + "\n")
-        sys.stderr.write(f"  CRITICAL: VOTER OTP GENERATED\n")
+        sys.stderr.write(f"  CRITICAL: VOTER OTP GENERATED (BACKEND GATEWAY)\n")
         sys.stderr.write(f"  PHONE: +91 {mobile_no}\n")
         sys.stderr.write(f"  OTP:   {otp}\n")
+        if not sms_success:
+            sys.stderr.write(f"  [GATEWAY] Twilio SMS Failed or Not Configured.\n")
+        else:
+            sys.stderr.write(f"  [GATEWAY] Backend SMS Dispatched via Twilio.\n")
         sys.stderr.write("█"*60 + "\n\n")
         sys.stderr.flush()
 
-        return {
+        print(f"DEBUG: Preparing Final Response for {aadhaar_number}", file=sys.stderr, flush=True)
+        response_data = {
             "status": "verified",
             "extractedAadhaar": extracted_no,
             "linkedMobile": f"xxxxxx{mobile_no[-4:]}",
             "fullMobile": mobile_no,
-            "otpSent": True,
-            "message": "Identity Verified. Secure OTP initiated."
+            "backendOtpSent": sms_success,
+            "message": "Identity Linked. Verification initiated."
         }
+        print(f"DEBUG: Returning JSON: {response_data}", file=sys.stderr, flush=True)
+        return response_data
     except HTTPException:
         raise
     except Exception as e:
         import traceback
         traceback_str = traceback.format_exc()
+        print(f"!!! CRITICAL EXCEPTION TYPE: {type(e).__name__} !!!", file=sys.stderr, flush=True)
         print(f"CRITICAL OCR FAILURE:\n{traceback_str}", file=sys.stderr, flush=True)
-        raise HTTPException(status_code=500, detail=f"AI Engine Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"AI Engine Error [{type(e).__name__}]: {str(e)}")
 
 @app.post("/api/verify-otp")
 async def verify_otp(
@@ -329,8 +413,9 @@ def verify_jwt(res: HTTPAuthorizationCredentials = Depends(security)):
             return decoded_token
             
         except Exception as e:
-            print(f"Auth Error: {e}")
-            raise HTTPException(status_code=401, detail="Invalid or Expired Firebase Token")
+            print(f"!!! FIREBASE VERIFICATION FAILED: {str(e)}", file=sys.stderr, flush=True)
+            # Re-raise with a more descriptive internal detail if needed
+            raise HTTPException(status_code=401, detail=f"Firebase Auto-Auth Failed: {str(e)}")
     
     # Handle Role-Specific Mock Tokens
     if token == "admin-token":
