@@ -668,7 +668,7 @@ def add_candidate_onchain(name: str = Form(...), symbol: str = Form(...), user: 
         raise HTTPException(status_code=500, detail=f"Transaction Failed: {str(e)}")
 
 @app.post("/api/vote")
-def cast_vote_onchain(candidate_id: int = Form(...), user: dict = Depends(verify_jwt)):
+async def cast_vote_onchain(candidate_id: int = Form(...), user: dict = Depends(verify_jwt)):
     """Backend-signed transaction to cast a vote (Voter verification required)."""
     if not user["uid"]:
         raise HTTPException(status_code=401, detail="Authentication required.")
@@ -683,6 +683,25 @@ def cast_vote_onchain(candidate_id: int = Form(...), user: dict = Depends(verify
         if not tx_hash:
             raise HTTPException(status_code=500, detail="Blockchain sync failed.")
             
+        # 2. Trigger Email Confirmation (Non-blocking)
+        try:
+            results = blockchain.get_results()
+            candidate_name = "Selected Candidate"
+            for c in results:
+                if c["id"] == candidate_id:
+                    candidate_name = c["name"]
+                    break
+            
+            voter_email = user.get("email")
+            if voter_email and voter_email != "mock@example.com":
+                send_real_email(
+                    to_email=voter_email,
+                    subject="SecureVote: Vote Confirmed",
+                    body=f"Dear Voter,\n\nYour vote for '{candidate_name}' has been successfully cast and recorded on the Ethereum Blockchain.\n\nTx Hash: {tx_hash}\n\nThis vote is now immutable and cannot be altered. Thank you for your participation.\n\nSecureVote System"
+                )
+        except Exception as email_err:
+            print(f"Non-critical: Email notification failed: {email_err}")
+
         return {
             "status": "success", 
             "txHash": tx_hash, 
