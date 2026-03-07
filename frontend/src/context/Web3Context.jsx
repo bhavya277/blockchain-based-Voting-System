@@ -16,6 +16,28 @@ export const Web3Provider = ({ children }) => {
     const [account, setAccount] = useState(null);
     const [results, setResults] = useState([]);
     const [isSyncing, setIsSyncing] = useState(false);
+    const [stream, setStream] = useState(null); // Live Proctoring Stream
+    const [votingEnded, setVotingEnded] = useState(false);
+
+    const startLiveAudit = async () => {
+        try {
+            const s = await navigator.mediaDevices.getUserMedia({
+                video: { facingMode: 'user' }
+            });
+            setStream(s);
+            return s;
+        } catch (err) {
+            console.error("Camera access denied:", err);
+            return null;
+        }
+    };
+
+    const stopLiveAudit = () => {
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            setStream(null);
+        }
+    };
 
     useEffect(() => {
         // Sync account state with verified Firebase user or Mock session
@@ -37,6 +59,7 @@ export const Web3Provider = ({ children }) => {
 
     const logout = async () => {
         try {
+            stopLiveAudit(); // Safety: Kill camera on logout
             if (auth) await signOut(auth);
             setAccount(null);
             return true;
@@ -46,13 +69,14 @@ export const Web3Provider = ({ children }) => {
         }
     };
 
-    const addCandidate = async (name) => {
+    const addCandidate = async (name, symbol) => {
         try {
             let token = await auth.currentUser?.getIdToken();
             if (!token) token = "admin-token";
 
             const formData = new FormData();
             formData.append('name', name);
+            formData.append('symbol', symbol);
 
             const res = await fetch('http://localhost:8000/api/candidates/add', {
                 method: 'POST',
@@ -62,7 +86,7 @@ export const Web3Provider = ({ children }) => {
 
             const data = await res.json();
             if (res.ok) {
-                alert(`Blockchain Success: ${name} added to ledger!\nTxHash: ${data.txHash.slice(0, 20)}...`);
+                alert(`Blockchain Success: ${name} added to ledger!`);
                 return true;
             } else {
                 alert(`Relayer Error: ${data.detail || "Transaction Reverted"}`);
@@ -71,6 +95,60 @@ export const Web3Provider = ({ children }) => {
         } catch (error) {
             console.error(error);
             alert("Hardware failure communicating with Blockchain Relayer.");
+            return false;
+        }
+    };
+
+    const endVoting = async () => {
+        try {
+            let token = await auth.currentUser?.getIdToken();
+            if (!token) token = "admin-token";
+
+            const res = await fetch('http://localhost:8000/api/end-voting', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            const data = await res.json();
+            if (res.ok) {
+                alert("The election has been officially CLOSED on the blockchain.");
+                setVotingEnded(true);
+                return true;
+            } else {
+                alert(`Error ending vote: ${data.detail}`);
+                return false;
+            }
+        } catch (err) {
+            alert("Connection error ending election.");
+            return false;
+        }
+    };
+
+    const startNewElection = async (name) => {
+        try {
+            let token = await auth.currentUser?.getIdToken();
+            if (!token) token = "admin-token";
+
+            const formData = new FormData();
+            formData.append('name', name);
+
+            const res = await fetch('http://localhost:8000/api/start-new-election', {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${token}` },
+                body: formData
+            });
+
+            if (res.ok) {
+                alert(`New election "${name}" is now LIVE on the blockchain!`);
+                setVotingEnded(false);
+                return true;
+            } else {
+                const data = await res.json();
+                alert(`Error starting new election: ${data.detail}`);
+                return false;
+            }
+        } catch (err) {
+            alert("Connection error starting new election.");
             return false;
         }
     };
@@ -109,8 +187,10 @@ export const Web3Provider = ({ children }) => {
         try {
             const res = await fetch('http://localhost:8000/api/results');
             const data = await res.json();
+            console.log("Frontend Fetched Results:", data.results);
             if (data.status === "success") {
                 setResults(data.results);
+                setVotingEnded(data.votingEnded);
                 return data.results;
             }
             return [];
@@ -146,7 +226,13 @@ export const Web3Provider = ({ children }) => {
             isSyncing,
             isAdmin,
             addCandidate,
-            logout
+            logout,
+            stream,
+            startLiveAudit,
+            stopLiveAudit,
+            votingEnded,
+            endVoting,
+            startNewElection
         }}>
             {children}
         </Web3Context.Provider>

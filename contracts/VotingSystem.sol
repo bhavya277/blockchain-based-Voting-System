@@ -6,61 +6,75 @@ pragma solidity ^0.8.20;
 contract VotingSystem {
     string public electionName;
     address public admin;
+    uint256 public candidatesCount;
+    bool public votingEnded;
+    uint256 public electionId;
 
     struct Candidate {
         uint256 id;
         string name;
+        string partySymbol;
         uint256 voteCount;
     }
-
-    mapping(uint256 => Candidate) public candidates;
-    uint256 public candidatesCount;
     
-    // Security: Uniqueness tracked by Unique Voter ID (Aadhaar/UID Hash)
-    // This allows the backend to relay votes while ensuring each human only votes once.
-    mapping(bytes32 => bool) public hasVoted;
+    mapping(uint256 => Candidate) public candidates;
+    mapping(uint256 => mapping(bytes32 => bool)) public hasVotedInElection;
 
-    event VoteCasted(bytes32 indexed voterId, uint256 candidateId);
+    event VoteCasted(uint256 indexed electionId, bytes32 indexed voterId, uint256 candidateId);
+    event VotingEnded(uint256 indexed electionId);
+    event NewElectionStarted(uint256 indexed electionId, string name);
 
     modifier onlyAdmin() {
         require(msg.sender == admin, "Only authorized relayer can submit votes");
         _;
     }
 
-    constructor(string memory _electionName, string[] memory _candidateNames) {
-        admin = msg.sender; // The backend relayer's address
+    constructor(string memory _electionName, string[] memory _candidateNames, string[] memory _partySymbols) {
+        admin = msg.sender;
+        electionId = 1;
         electionName = _electionName;
         
+        require(_candidateNames.length == _partySymbols.length, "Names and symbols mismatch");
         for (uint256 i = 0; i < _candidateNames.length; i++) {
-            _addInternal(_candidateNames[i]);
+            _addInternal(_candidateNames[i], _partySymbols[i]);
         }
     }
 
-    function addCandidate(string memory _name) public onlyAdmin {
-        _addInternal(_name);
+    function startNewElection(string memory _newName) public onlyAdmin {
+        require(votingEnded, "Must end ongoing election first");
+        electionId++;
+        electionName = _newName;
+        candidatesCount = 0;
+        votingEnded = false;
+        emit NewElectionStarted(electionId, _newName);
     }
 
-    function _addInternal(string memory _name) internal {
+    function addCandidate(string memory _name, string memory _symbol) public onlyAdmin {
+        require(!votingEnded, "Cannot add candidates after voting has ended");
+        _addInternal(_name, _symbol);
+    }
+
+    function _addInternal(string memory _name, string memory _symbol) internal {
         candidatesCount++;
-        candidates[candidatesCount] = Candidate(candidatesCount, _name, 0);
+        candidates[candidatesCount] = Candidate(candidatesCount, _name, _symbol, 0);
     }
 
-    /// @notice Core voting function (Relayer signs this)
-    /// @param _voterId The unique hash of the voter's identity (e.g., keccak256(aadhaar))
-    function vote(bytes32 _voterId, uint256 _candidateId) public onlyAdmin {
-        // Security checks
-        require(!hasVoted[_voterId], "This identity has already cast a vote.");
-        require(_candidateId > 0 && _candidateId <= candidatesCount, "Invalid candidate selection.");
+    function endVoting() public onlyAdmin {
+        votingEnded = true;
+        emit VotingEnded(electionId);
+    }
 
-        // State modifications
-        hasVoted[_voterId] = true;
+    function vote(bytes32 _voterId, uint256 _candidateId) public onlyAdmin {
+        require(!votingEnded, "Voting has ended.");
+        require(!hasVotedInElection[electionId][_voterId], "Already voted in this election.");
+        require(_candidateId > 0 && _candidateId <= candidatesCount, "Invalid candidate.");
+
+        hasVotedInElection[electionId][_voterId] = true;
         candidates[_candidateId].voteCount++;
 
-        // Event emission for transparency
-        emit VoteCasted(_voterId, _candidateId);
+        emit VoteCasted(electionId, _voterId, _candidateId);
     }
 
-    /// @notice Returns all candidates for frontend mapping
     function getResults() public view returns (Candidate[] memory) {
         Candidate[] memory results = new Candidate[](candidatesCount);
         for (uint256 i = 1; i <= candidatesCount; i++) {

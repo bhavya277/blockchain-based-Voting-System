@@ -23,6 +23,7 @@ class BlockchainService:
         
         if self.contract_address and self.contract_abi:
             self.contract = self.w3.eth.contract(address=self.contract_address, abi=self.contract_abi)
+            print(f"✅ Blockchain Contract loaded at: {self.contract_address}")
         else:
             self.contract = None
             print("Warning: Blockchain Contract not initialized. Check frontend/src/utils/ paths.")
@@ -51,17 +52,50 @@ class BlockchainService:
     def is_connected(self):
         return self.w3.is_connected()
 
-    def add_candidate(self, name: str):
+    def add_candidate(self, name: str, symbol: str):
         if not self.contract: return None
         
         nonce = self.w3.eth.get_transaction_count(self.account.address)
-        txn = self.contract.functions.addCandidate(name).build_transaction({
+        txn = self.contract.functions.addCandidate(name, symbol).build_transaction({
             'chainId': 31337,
-            'gas': 2000000,
+            'gas': 10000000,
             'gasPrice': self.w3.eth.gas_price,
             'nonce': nonce,
         })
         
+        signed_txn = self.w3.eth.account.sign_transaction(txn, private_key=self.private_key)
+        tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+        return self.w3.to_hex(tx_hash)
+
+    def end_voting(self):
+        if not self.contract: return None
+        nonce = self.w3.eth.get_transaction_count(self.account.address)
+        txn = self.contract.functions.endVoting().build_transaction({
+            'chainId': 31337,
+            'gas': 10000000,
+            'gasPrice': self.w3.eth.gas_price,
+            'nonce': nonce,
+        })
+        signed_txn = self.w3.eth.account.sign_transaction(txn, private_key=self.private_key)
+        tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
+        return self.w3.to_hex(tx_hash)
+
+    def get_voting_status(self):
+        if not self.contract: return False
+        try:
+            return self.contract.functions.votingEnded().call()
+        except:
+            return False
+
+    def start_new_election(self, new_name: str):
+        if not self.contract: return None
+        nonce = self.w3.eth.get_transaction_count(self.account.address)
+        txn = self.contract.functions.startNewElection(new_name).build_transaction({
+            'chainId': 31337,
+            'gas': 10000000,
+            'gasPrice': self.w3.eth.gas_price,
+            'nonce': nonce,
+        })
         signed_txn = self.w3.eth.account.sign_transaction(txn, private_key=self.private_key)
         tx_hash = self.w3.eth.send_raw_transaction(signed_txn.raw_transaction)
         return self.w3.to_hex(tx_hash)
@@ -79,7 +113,7 @@ class BlockchainService:
         nonce = self.w3.eth.get_transaction_count(self.account.address)
         txn = self.contract.functions.vote(voter_id_bytes, candidate_id).build_transaction({
             'chainId': 31337,
-            'gas': 2000000,
+            'gas': 10000000,
             'gasPrice': self.w3.eth.gas_price,
             'nonce': nonce,
         })
@@ -100,9 +134,11 @@ class BlockchainService:
         try:
             results = self.contract.functions.getResults().call()
             return [
-                {"id": r[0], "name": r[1], "voteCount": r[2]}
+                {"id": r[0], "name": r[1], "symbol": r[2], "voteCount": r[3]}
                 for r in results
             ]
         except Exception as e:
+            import traceback
             print(f"Contract Call Error: {e}")
+            traceback.print_exc()
             return []

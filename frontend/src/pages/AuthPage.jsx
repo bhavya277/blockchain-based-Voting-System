@@ -1,9 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useContext } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import { auth, db } from '../firebase/firebaseConfig';
 import { createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
 import { Shield, Fingerprint, Mail, Lock, CheckCircle, ArrowRight, Loader2, Upload, Camera, Smartphone, Key, Search } from 'lucide-react';
+import { Web3Context } from '../context/Web3Context';
 
 const AuthPage = () => {
     const [searchParams] = useSearchParams();
@@ -25,6 +26,8 @@ const AuthPage = () => {
     const [voterCardPreview, setVoterCardPreview] = useState(null);
     const [extractedMobile, setExtractedMobile] = useState('');
     const [otp, setOtp] = useState('');
+    const [userPhotoFile, setUserPhotoFile] = useState(null);
+    const [userPhotoPreview, setUserPhotoPreview] = useState(null);
 
     // Phase Tracking (1: Aadhaar, 2: Email, 3: Face, 4: Credentials)
     const [verificationStep, setVerificationStep] = useState(1);
@@ -37,26 +40,34 @@ const AuthPage = () => {
     const [emailOtp, setEmailOtp] = useState("");
     const [isEmailOtpLoading, setIsEmailOtpLoading] = useState(false);
 
-    // Camera states
+    // Camera states (Using Global Context)
+    const { stream, startLiveAudit, stopLiveAudit } = useContext(Web3Context);
     const [faceCaptured, setFaceCaptured] = useState(null);
-    const [stream, setStream] = useState(null);
+    const [showCamera, setShowCamera] = useState(false);
     const videoRef = useRef(null);
 
-    // Skip identity verification for returning users (Login mode)
+    // For login mode, we now start with Credentials (Email, Pass, Aadhaar) -> Email OTP -> Biometric
     useEffect(() => {
+        stopLiveAudit();
+        setShowCamera(false);
+        setFaceCaptured(null);
         if (mode === 'login') {
-            setAadhaarVerified(true);
-            setEmailVerified(true);
-            setFaceVerified(true);
-            setVerificationStep(4);
-        } else {
-            // Reset for Signup mode
             setAadhaarVerified(false);
             setEmailVerified(false);
             setFaceVerified(false);
-            setVerificationStep(1);
+            setVerificationStep(4);    // Start at Credentials + Aadhaar
+        } else {
+            setAadhaarVerified(false);
+            setEmailVerified(false);
+            setFaceVerified(false);
+            setVerificationStep(1);    // Start at Aadhaar Enrollment
         }
     }, [mode]);
+
+    // Cleanup camera on unmount
+    useEffect(() => {
+        return () => stopLiveAudit();
+    }, []);
 
     const apiBase = 'http://localhost:8000';
 
@@ -150,7 +161,7 @@ const AuthPage = () => {
 
             setStep(5);
             setAadhaarVerified(true);
-            setVerificationStep(2);
+            setVerificationStep(mode === 'login' ? 3 : 2); // Login goes to Biometric, Signup to Email
             setError('');
         } catch (err) {
             setError(err.message);
@@ -194,8 +205,10 @@ const AuthPage = () => {
             const res = await fetch(`${apiBase}/api/verify-email-otp`, { method: 'POST', body: formData });
             if (res.ok) {
                 setEmailVerified(true);
-                setVerificationStep(3);
+                setVerificationStep(3); // Move to Biometric Scan
                 setError("");
+                // Auto-start camera
+                startCamera();
             } else {
                 const data = await res.json();
                 throw new Error(data.detail || "Invalid Email OTP");
@@ -209,15 +222,11 @@ const AuthPage = () => {
 
     const startCamera = async () => {
         setError('');
-        try {
-            const s = await navigator.mediaDevices.getUserMedia({
-                video: { facingMode: 'user' }
-            });
-            setStream(s);
-            // srcObject will be handled by useEffect
-        } catch (err) {
+        setShowCamera(true);
+        const s = await startLiveAudit();
+        if (!s) {
             setError("Camera access denied or device not found.");
-            console.error("Camera error:", err);
+            setShowCamera(false);
         }
     };
 
@@ -232,53 +241,63 @@ const AuthPage = () => {
         }
     }, [stream]);
 
-    const stopCamera = () => {
-        if (stream) {
-            stream.getTracks().forEach(track => track.stop());
-            setStream(null);
-        }
-    };
-
     const captureFace = async () => {
-        if (!videoRef.current || !stream) {
-            setError("Camera not ready.");
+        // If we have a file selected in signup mode, use that. Otherwise use camera.
+        let finalImage = faceCaptured;
+
+        if (mode === 'signup' && userPhotoPreview) {
+            finalImage = userPhotoPreview;
+        }
+
+        if (!finalImage && (!videoRef.current || !stream)) {
+            setError("Please either upload a photo or start the camera.");
             return;
         }
 
-        // Check if video is actually playing and has dimensions
-        if (videoRef.current.readyState < 2 || videoRef.current.videoWidth === 0) {
-            setError("Wait for camera to initialize...");
-            return;
+        // If using camera but not captured yet
+        if (!finalImage) {
+            if (videoRef.current.readyState < 2 || videoRef.current.videoWidth === 0) {
+                setError("Wait for camera to initialize...");
+                return;
+            }
+            const canvas = document.createElement('canvas');
+            canvas.width = 300;
+            canvas.height = 300;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+            finalImage = canvas.toDataURL('image/jpeg', 0.8);
+            setFaceCaptured(finalImage);
         }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = videoRef.current.videoWidth;
-        canvas.height = videoRef.current.videoHeight;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-        setFaceCaptured(dataUrl);
-        stopCamera();
 
         setLoading(true);
         setError('');
         try {
-            const blob = await (await fetch(dataUrl)).blob();
             const formData = new FormData();
-            formData.append('face_image', blob, 'face.jpg');
+            formData.append('face_image', finalImage);
             formData.append('uid', email);
 
-            const res = await fetch(`${apiBase}/api/verify-face`, { method: 'POST', body: formData });
+            const endpoint = mode === 'signup' ? '/api/biometric/register' : '/api/verify-face';
+            const res = await fetch(`${apiBase}${endpoint}`, { method: 'POST', body: formData });
+
+            const data = await res.json();
             if (res.ok) {
                 setFaceVerified(true);
-                setVerificationStep(4);
+                if (mode === 'login') {
+                    setError("Biometrics Confirmed. Redirecting to Secure Dashboard...");
+                    setTimeout(() => {
+                        navigate(role === 'admin' ? '/admin' : '/voter/dashboard');
+                    }, 1000);
+                } else {
+                    setVerificationStep(4);
+                }
+                stopLiveAudit();
             } else {
-                const data = await res.json();
-                throw new Error(data.detail || "Face verification failed");
+                throw new Error(data.detail || "Biometric validation failed. Please ensure your face is clearly visible.");
             }
         } catch (err) {
-            setError(err.message);
+            setError(err.message + " Ensure you registered with this email.");
+            setFaceCaptured(null);
+            setShowCamera(false); // Reset to allow retry
         } finally {
             setLoading(false);
         }
@@ -286,8 +305,8 @@ const AuthPage = () => {
 
     const handleAuth = async (e) => {
         e.preventDefault();
-        if (!aadhaarVerified || !emailVerified || !faceVerified) {
-            setError('Please complete all verification steps.');
+        if (mode === 'signup' && (!aadhaarVerified || !emailVerified || !faceVerified)) {
+            setError('Please complete Aadhaar, Email and Face verification first.');
             return;
         }
 
@@ -305,6 +324,11 @@ const AuthPage = () => {
             }
 
             if (mode === 'signup') {
+                if (!aadhaarVerified || !emailVerified || !faceVerified) {
+                    setError('Please complete all verification steps first.');
+                    setLoading(false);
+                    return;
+                }
                 const userCredential = await createUserWithEmailAndPassword(auth, email, password);
                 const user = userCredential.user;
                 const token = await user.getIdToken();
@@ -313,7 +337,7 @@ const AuthPage = () => {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
                     body: JSON.stringify({
-                        email, role, aadhaar: aadhaar.replace(/\d(?=\d{4})/g, "*"),
+                        email, role, aadhaar, // Full Aadhaar sent for identity linking
                         voter_id: voterId, mobile: extractedMobile, wallet_address: "not-connected"
                     })
                 });
@@ -321,18 +345,37 @@ const AuthPage = () => {
                 if (!regResponse.ok) throw new Error('Backend sync failed');
                 navigate(role === 'admin' ? '/admin' : '/voter/dashboard');
             } else {
+                // LOGIN FLOW: Step 1 (Verify Credentials + Aadhaar Number)
+                if (!aadhaar || aadhaar.length !== 12) {
+                    throw new Error("Please enter your 12-digit Aadhaar number for verification.");
+                }
+
                 const userCredential = await signInWithEmailAndPassword(auth, email, password);
                 const user = userCredential.user;
                 const token = await user.getIdToken();
 
+                // Check profile for Aadhaar match
                 const profileRes = await fetch(`${apiBase}/api/users/profile`, {
                     headers: { 'Authorization': `Bearer ${token}` }
                 });
 
-                if (!profileRes.ok) throw new Error('Could not verify account details.');
+                if (!profileRes.ok) throw new Error('Could not retrieve account profile.');
                 const profile = await profileRes.json();
-                if (profile.role !== role) throw new Error(`Incorrect role.`);
-                navigate(role === 'admin' ? '/admin' : '/voter/dashboard');
+
+                // For security, we compare the entered Aadhaar with the masked or full one on file
+                // Note: profile.aadhaar is usually masked like *******1234
+                const enteredLast4 = aadhaar.slice(-4);
+                const storedLast4 = profile.aadhaar.slice(-4);
+
+                if (enteredLast4 !== storedLast4) {
+                    throw new Error("Aadhaar Number mismatch. Please enter the number linked to this account.");
+                }
+
+                console.log("Credentials & Aadhaar Verified, moving to Email OTP");
+                setAadhaarVerified(true);
+                setVerificationStep(2); // Move to Email OTP
+                handleSendEmailOtp();    // Auto-trigger OTP
+                setError("");
             }
         } catch (err) {
             console.error("Auth Error:", err);
@@ -394,27 +437,29 @@ const AuthPage = () => {
                                             </div>
                                         </div>
 
-                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                            <div onClick={() => fileInputRef.current.click()} className="group cursor-pointer border-2 border-dashed border-slate-700 hover:border-blue-500/50 rounded-2xl p-4 text-center transition-all">
-                                                <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileSelect} />
-                                                <div className="flex flex-col items-center">
-                                                    <Camera className="w-5 h-5 text-slate-400 group-hover:text-blue-400 mb-2" />
-                                                    <p className="text-xs font-semibold text-slate-300">Aadhaar Card</p>
-                                                    {previewUrl && <p className="text-[10px] text-emerald-400 mt-1">✓ Selected</p>}
+                                        {mode === 'signup' && (
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                                <div onClick={() => fileInputRef.current.click()} className="group cursor-pointer border-2 border-dashed border-slate-700 hover:border-blue-500/50 rounded-2xl p-4 text-center transition-all">
+                                                    <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileSelect} />
+                                                    <div className="flex flex-col items-center">
+                                                        <Camera className="w-5 h-5 text-slate-400 group-hover:text-blue-400 mb-2" />
+                                                        <p className="text-xs font-semibold text-slate-300">Aadhaar Card</p>
+                                                        {previewUrl && <p className="text-[10px] text-emerald-400 mt-1">✓ Selected</p>}
+                                                    </div>
+                                                </div>
+                                                <div onClick={() => document.getElementById('voter-file').click()} className="group cursor-pointer border-2 border-dashed border-slate-700 hover:border-purple-500/50 rounded-2xl p-4 text-center transition-all">
+                                                    <input id="voter-file" type="file" className="hidden" accept="image/*" onChange={(e) => {
+                                                        const f = e.target.files[0];
+                                                        if (f) { setVoterCardFile(f); setVoterCardPreview(URL.createObjectURL(f)); }
+                                                    }} />
+                                                    <div className="flex flex-col items-center">
+                                                        <Upload className="w-5 h-5 text-slate-400 group-hover:text-purple-400 mb-2" />
+                                                        <p className="text-xs font-semibold text-slate-300">Voter Card</p>
+                                                        {voterCardPreview && <p className="text-[10px] text-emerald-400 mt-1">✓ Selected</p>}
+                                                    </div>
                                                 </div>
                                             </div>
-                                            <div onClick={() => document.getElementById('voter-file').click()} className="group cursor-pointer border-2 border-dashed border-slate-700 hover:border-purple-500/50 rounded-2xl p-4 text-center transition-all">
-                                                <input id="voter-file" type="file" className="hidden" accept="image/*" onChange={(e) => {
-                                                    const f = e.target.files[0];
-                                                    if (f) { setVoterCardFile(f); setVoterCardPreview(URL.createObjectURL(f)); }
-                                                }} />
-                                                <div className="flex flex-col items-center">
-                                                    <Upload className="w-5 h-5 text-slate-400 group-hover:text-purple-400 mb-2" />
-                                                    <p className="text-xs font-semibold text-slate-300">Voter Card</p>
-                                                    {voterCardPreview && <p className="text-[10px] text-emerald-400 mt-1">✓ Selected</p>}
-                                                </div>
-                                            </div>
-                                        </div>
+                                        )}
 
                                         <button type="button" onClick={() => simulateScanning()} disabled={verifying} className="w-full mt-4 py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 group">
                                             {verifying ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Search className="w-5 h-5 group-hover:scale-110" />Start AI Verification</>}
@@ -479,9 +524,51 @@ const AuthPage = () => {
                                 <div className="text-center">
                                     <Shield className="w-10 h-10 text-purple-400 mx-auto mb-2" />
                                     <h3 className="text-lg font-bold">Biometric Enrollment</h3>
+                                    {mode === 'signup' && <p className="text-[10px] text-slate-500 uppercase tracking-widest mt-1">Upload reference photo OR use camera</p>}
                                 </div>
+
+                                {mode === 'signup' && !stream && !faceCaptured && (
+                                    <div className="flex flex-col gap-4">
+                                        <div
+                                            onClick={() => document.getElementById('user-photo-upload').click()}
+                                            className="cursor-pointer border-2 border-dashed border-slate-700 hover:border-purple-500/50 rounded-2xl p-6 text-center transition-all bg-slate-900/50"
+                                        >
+                                            <input
+                                                id="user-photo-upload"
+                                                type="file"
+                                                className="hidden"
+                                                accept="image/*"
+                                                onChange={(e) => {
+                                                    const f = e.target.files[0];
+                                                    if (f) {
+                                                        setUserPhotoFile(f);
+                                                        const reader = new FileReader();
+                                                        reader.onload = (e) => setUserPhotoPreview(e.target.result);
+                                                        reader.readAsDataURL(f);
+                                                    }
+                                                }}
+                                            />
+                                            <Upload className="w-8 h-8 text-slate-400 mx-auto mb-2" />
+                                            <p className="text-sm font-bold text-slate-300">Choose Master Photo</p>
+                                            {userPhotoPreview && <p className="text-xs text-emerald-400 mt-1">✓ Photo selected from file</p>}
+                                        </div>
+                                        <div className="flex items-center gap-4">
+                                            <div className="flex-grow h-px bg-slate-800"></div>
+                                            <span className="text-[10px] text-slate-600 font-bold uppercase">OR</span>
+                                            <div className="flex-grow h-px bg-slate-800"></div>
+                                        </div>
+                                    </div>
+                                )}
+
                                 <div className="relative rounded-2xl overflow-hidden bg-slate-900 border border-slate-700 aspect-video flex items-center justify-center">
-                                    {faceCaptured ? (
+                                    {userPhotoPreview && mode === 'signup' && !faceCaptured ? (
+                                        <div className="relative w-full h-full">
+                                            <img src={userPhotoPreview} alt="Reference" className="w-full h-full object-cover" />
+                                            <button type="button" onClick={() => { setUserPhotoPreview(null); setUserPhotoFile(null); }} className="absolute top-2 right-2 bg-red-500/80 text-white p-1.5 rounded-full hover:bg-red-600">
+                                                <Lock className="w-4 h-4" />
+                                            </button>
+                                        </div>
+                                    ) : faceCaptured ? (
                                         <div className="relative w-full h-full">
                                             <img src={faceCaptured} alt="Captured" className="w-full h-full object-cover" />
                                             <button
@@ -492,7 +579,7 @@ const AuthPage = () => {
                                                 <Camera className="w-5 h-5" />
                                             </button>
                                         </div>
-                                    ) : !stream ? (
+                                    ) : !showCamera ? (
                                         <button type="button" onClick={startCamera} className="flex flex-col items-center text-slate-500 hover:text-white transition-colors">
                                             <Camera className="w-12 h-12 mb-2" />
                                             <span className="text-sm">Start Biometric Scan</span>
@@ -502,9 +589,11 @@ const AuthPage = () => {
                                     )}
                                     {stream && !faceCaptured && <div className="absolute inset-0 border-[3px] border-purple-500/50 rounded-full m-4 pointer-events-none animate-pulse" />}
                                 </div>
-                                {stream && !faceCaptured && (
+
+                                {((stream && !faceCaptured) || (userPhotoPreview && mode === 'signup')) && (
                                     <button type="button" onClick={captureFace} className="w-full py-4 bg-purple-600 hover:bg-purple-500 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2">
-                                        <Fingerprint className="w-5 h-5" />Capture & Verify Biometrics
+                                        <Fingerprint className="w-5 h-5" />
+                                        {mode === 'signup' ? 'Finalize Biometric Enrollment' : 'Capture & Verify Biometrics'}
                                     </button>
                                 )}
                             </div>
@@ -525,6 +614,19 @@ const AuthPage = () => {
                                             required
                                         />
                                     </div>
+
+                                    {mode === 'login' && (
+                                        <div className="space-y-2">
+                                            <label className="text-xs font-bold text-slate-500 ml-1">AADHAAR NUMBER</label>
+                                            <input
+                                                type="text" maxLength="12" placeholder="12 Digit Number" value={aadhaar}
+                                                onChange={(e) => setAadhaar(e.target.value.replace(/\D/g, ''))}
+                                                className="w-full bg-slate-900/50 border border-slate-700/50 rounded-xl py-3 px-4 text-white focus:ring-2 focus:ring-emerald-500/50 font-mono"
+                                                required
+                                            />
+                                        </div>
+                                    )}
+
                                     <div className="space-y-2">
                                         <label className="text-xs font-bold text-slate-500 ml-1">{mode === 'login' ? 'VERIFY PASSWORD' : 'SET SECURE PASSWORD'}</label>
                                         <input
@@ -534,7 +636,7 @@ const AuthPage = () => {
                                         />
                                     </div>
                                     <button type="submit" disabled={loading} className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-4 rounded-xl shadow-lg flex items-center justify-center gap-2">
-                                        {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : mode === 'login' ? 'Secure Login' : 'Final Registration'}
+                                        {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : mode === 'login' ? 'Continue to Email OTP' : 'Final Registration'}
                                     </button>
                                 </div>
                             </div>
@@ -550,10 +652,16 @@ const AuthPage = () => {
 
                 <div className="mt-8 text-center text-sm border-t border-slate-800/50 pt-6">
                     <p className="text-slate-400">
-                        {mode === 'login' ? "Don't have an account?" : "Already verified?"}{' '}
-                        <Link to={`/auth?role=${role}&mode=${mode === 'login' ? 'signup' : 'login'}`} className={`text-${themeColor}-400 font-bold hover:underline`}>
-                            {mode === 'login' ? 'Signup with Aadhaar' : 'Login here'}
-                        </Link>
+                        {mode === 'login' ? (
+                            "Public registration is currently closed. Contact election authority."
+                        ) : (
+                            <>
+                                Already verified?{' '}
+                                <Link to={`/auth?role=${role}&mode=login`} className={`text-${themeColor}-400 font-bold hover:underline`}>
+                                    Login here
+                                </Link>
+                            </>
+                        )}
                     </p>
                 </div>
             </div>
@@ -563,6 +671,8 @@ const AuthPage = () => {
                 .animate-scan { position: absolute; width: 100%; height: 2px; animation: scan 2s linear infinite; }
                 @keyframes shake { 0%, 100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
                 .animate-shake { animation: shake 0.2s ease-in-out 0s 2; }
+                @keyframes fade-in { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+                .animate-fade-in { animation: fade-in 0.4s ease-out; }
             `}</style>
         </div>
     );

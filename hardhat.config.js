@@ -16,7 +16,10 @@ module.exports = {
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : []
     },
     hardhat: {
-      chainId: 31337
+      chainId: 31337,
+      blockGasLimit: 100000000,
+      gas: 100000000,
+      allowUnlimitedContractSize: true
     }
   }
 };

@@ -1,10 +1,10 @@
 import { useContext, useEffect, useState } from 'react';
 import { Web3Context } from '../context/Web3Context';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts';
-import { Loader2, RefreshCw, BarChart3, TrendingUp, Users, ShieldCheck } from 'lucide-react';
+import { Loader2, RefreshCw, BarChart3, TrendingUp, Users, ShieldCheck, CheckCircle2 } from 'lucide-react';
 
 export default function Results() {
-    const { getResults, isSyncing } = useContext(Web3Context);
+    const { getResults, isSyncing, votingEnded } = useContext(Web3Context);
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
 
@@ -15,6 +15,7 @@ export default function Results() {
             if (res) {
                 const formatted = res.map(c => ({
                     name: c.name,
+                    symbol: c.symbol,
                     votes: c.voteCount
                 }));
                 setData(formatted);
@@ -28,12 +29,35 @@ export default function Results() {
 
     useEffect(() => {
         fetchResults();
-        // Auto refresh every 15 seconds to sync with block productions
         const interval = setInterval(fetchResults, 15000);
         return () => clearInterval(interval);
     }, []);
 
     const totalVotes = data.reduce((acc, curr) => acc + curr.votes, 0);
+
+    // Lock screen if voting is still active
+    if (!votingEnded) {
+        return (
+            <div className="flex-grow flex items-center justify-center p-6">
+                <div className="glass-panel p-12 max-w-xl w-full text-center space-y-8 border-brand-500/30">
+                    <div className="relative">
+                        <div className="absolute inset-0 bg-brand-500/20 blur-3xl rounded-full" />
+                        <ShieldCheck className="w-20 h-20 mx-auto text-brand-400 relative" />
+                    </div>
+                    <div className="space-y-4">
+                        <h2 className="text-4xl font-black text-white italic uppercase tracking-tighter">Election in Progress</h2>
+                        <p className="text-slate-400 text-lg">Blockchain results are sealed until the election commission officially closes the voting period.</p>
+                    </div>
+                    <div className="pt-6">
+                        <div className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 rounded-full border border-slate-800 text-xs font-bold text-slate-500 uppercase tracking-widest">
+                            <RefreshCw className="w-3 h-3 animate-spin text-brand-500" />
+                            Awaiting Decentralized Finality
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     return (
         <div className="flex-grow max-w-6xl mx-auto w-full px-6 py-12">
@@ -43,47 +67,49 @@ export default function Results() {
                         <div className="p-2 bg-brand-500/10 rounded-lg">
                             <BarChart3 className="w-6 h-6 text-brand-400" />
                         </div>
-                        <h1 className="text-3xl font-black tracking-tight text-white">Live Election Ledger</h1>
+                        <h1 className="text-3xl font-black tracking-tight text-white uppercase italic">Official Results Ledger</h1>
                     </div>
-                    <p className="text-slate-400">Real-time immutable data stream from the Ethereum network.</p>
+                    <p className="text-slate-400">Final immutable data stream from the Ethereum network.</p>
                 </div>
-                <button
-                    onClick={fetchResults}
-                    className="glass-panel px-6 py-3 flex items-center gap-3 hover:bg-slate-800 transition-all border-slate-700/50"
-                >
-                    <RefreshCw className={`w-4 h-4 ${isSyncing || loading ? 'animate-spin text-brand-400' : 'text-slate-400'}`} />
-                    <span className="text-sm font-bold text-slate-300">Sync Ledger</span>
-                </button>
+                <div className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-6 py-2 rounded-xl font-black uppercase text-xs tracking-widest italic flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4" />
+                    Certified Final
+                </div>
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-4 gap-8 mb-10">
                 <div className="lg:col-span-1 space-y-6">
                     <div className="glass-panel p-6 bg-brand-500/5 border-brand-500/20">
-                        <p className="text-slate-500 text-[10px] uppercase font-black tracking-widest mb-1">Total Cast Votes</p>
+                        <p className="text-slate-500 text-[10px] uppercase font-black tracking-widest mb-1">Total Verified Turnout</p>
                         <h2 className="text-4xl font-black text-brand-400 font-mono mb-2">
                             {totalVotes}
                         </h2>
-                        <div className="flex items-center gap-2 text-xs text-brand-500/70">
-                            <TrendingUp className="w-3 h-3" />
-                            <span>Incorruptible Tally</span>
-                        </div>
                     </div>
 
                     <div className="glass-panel p-6 border-slate-800/50">
-                        <div className="flex items-center gap-3 mb-4">
-                            <Users className="w-4 h-4 text-brand-400" />
-                            <h3 className="text-sm font-bold text-white uppercase tracking-tight">Voter Engagement</h3>
+                        <div className="flex items-center gap-3 mb-6">
+                            <TrendingUp className="w-4 h-4 text-brand-400" />
+                            <h3 className="text-sm font-bold text-white uppercase tracking-tight italic">Share Distribution</h3>
                         </div>
-                        <div className="space-y-4">
-                            {data.map((entry, index) => (
-                                <div key={entry.name} className="space-y-1.5">
-                                    <div className="flex justify-between text-xs">
-                                        <span className="text-slate-400 font-medium">{entry.name}</span>
-                                        <span className="text-brand-400 font-bold">{totalVotes > 0 ? Math.round((entry.votes / totalVotes) * 100) : 0}%</span>
+                        <div className="space-y-6">
+                            {data.map((entry) => (
+                                <div key={entry.name} className="space-y-2">
+                                    <div className="flex justify-between items-center text-xs">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-8 h-8 bg-slate-900 rounded-lg border border-slate-800 overflow-hidden p-1 flex items-center justify-center">
+                                                {entry.symbol && entry.symbol.startsWith('data:') ? (
+                                                    <img src={entry.symbol} alt="Logo" className="w-full h-full object-contain" />
+                                                ) : (
+                                                    <span className="text-sm">{entry.symbol || '❓'}</span>
+                                                )}
+                                            </div>
+                                            <span className="text-white font-bold">{entry.name}</span>
+                                        </div>
+                                        <span className="text-brand-400 font-black">{totalVotes > 0 ? Math.round((entry.votes / totalVotes) * 100) : 0}%</span>
                                     </div>
                                     <div className="h-1.5 w-full bg-slate-900 rounded-full overflow-hidden border border-slate-800/30">
                                         <div
-                                            className="h-full bg-brand-500 rounded-full transition-all duration-1000 ease-out"
+                                            className="h-full bg-brand-500 rounded-full transition-all duration-1000 ease-out shadow-[0_0_8px_rgba(45,212,191,0.5)]"
                                             style={{ width: `${totalVotes > 0 ? (entry.votes / totalVotes) * 100 : 0}%` }}
                                         ></div>
                                     </div>
@@ -95,9 +121,9 @@ export default function Results() {
 
                 <div className="lg:col-span-3">
                     <div className="glass-panel p-8 h-full border-slate-800/50 flex flex-col">
-                        <h3 className="text-lg font-bold text-white mb-8 flex items-center gap-3">
-                            <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                            Distribution Visualization
+                        <h3 className="text-lg font-bold text-white mb-8 flex items-center gap-3 italic">
+                            <div className="w-2 h-2 rounded-full bg-brand-500"></div>
+                            Blockchain Visual Audit
                         </h3>
                         <div className="flex-grow min-h-[400px]">
                             <ResponsiveContainer width="100%" height="100%">
@@ -105,23 +131,34 @@ export default function Results() {
                                     <XAxis
                                         dataKey="name"
                                         stroke="#1e293b"
-                                        tick={{ fill: '#64748b', fontSize: 11, fontWeight: 700 }}
+                                        tick={{ fill: '#94a3b8', fontSize: 10, fontWeight: 900 }}
                                         axisLine={false}
                                         tickLine={false}
                                         dy={10}
                                     />
-                                    <YAxis
-                                        allowDecimals={false}
-                                        stroke="#1e293b"
-                                        tick={{ fill: '#475569', fontSize: 11, fontWeight: 700 }}
-                                        axisLine={false}
-                                        tickLine={false}
-                                    />
+                                    <YAxis hide />
                                     <Tooltip
                                         cursor={{ fill: '#0f172a', radius: 16 }}
-                                        contentStyle={{ backgroundColor: '#020617', borderColor: '#1e293b', borderRadius: '16px', border: '1px solid #1e293b', boxShadow: '0 20px 50px rgba(0,0,0,0.5)' }}
-                                        itemStyle={{ color: '#2dd4bf', fontWeight: '900', fontSize: '14px' }}
-                                        labelStyle={{ color: '#94a3b8', marginBottom: '8px', fontSize: '11px', textTransform: 'uppercase', fontWeight: 'bold', letterSpacing: '0.1em' }}
+                                        content={({ active, payload }) => {
+                                            if (active && payload && payload.length) {
+                                                return (
+                                                    <div className="bg-slate-950 border border-slate-800 p-4 rounded-2xl shadow-2xl">
+                                                        <div className="flex items-center gap-3 mb-1">
+                                                            <div className="w-10 h-10 bg-slate-900 rounded-lg border border-slate-800 overflow-hidden p-1 flex items-center justify-center">
+                                                                {payload[0].payload.symbol && payload[0].payload.symbol.startsWith('data:') ? (
+                                                                    <img src={payload[0].payload.symbol} alt="Logo" className="w-full h-full object-contain" />
+                                                                ) : (
+                                                                    <span className="text-xl">{payload[0].payload.symbol || '❓'}</span>
+                                                                )}
+                                                            </div>
+                                                            <p className="text-white font-black uppercase text-sm">{payload[0].payload.name}</p>
+                                                        </div>
+                                                        <p className="text-brand-400 font-black font-mono text-lg">{payload[0].value} <span className="text-[10px] text-slate-500">VOTES RECORDED</span></p>
+                                                    </div>
+                                                );
+                                            }
+                                            return null;
+                                        }}
                                     />
                                     <Bar dataKey="votes" radius={[12, 12, 0, 0]} barSize={60}>
                                         {data.map((entry, index) => (
@@ -135,14 +172,14 @@ export default function Results() {
                 </div>
             </div>
 
-            <div className="p-8 glass-panel border-brand-500/20 bg-brand-500/5 rounded-[2rem] flex flex-col md:flex-row items-center gap-8 text-center md:text-left">
-                <div className="w-16 h-16 bg-brand-500/10 rounded-[1.5rem] flex items-center justify-center shrink-0 border border-brand-500/30">
-                    <ShieldCheck className="w-8 h-8 text-brand-400" />
+            <div className="p-8 glass-panel border-emerald-500/20 bg-emerald-500/5 rounded-[2rem] flex flex-col md:flex-row items-center gap-8">
+                <div className="w-16 h-16 bg-emerald-500/10 rounded-[1.5rem] flex items-center justify-center shrink-0 border border-emerald-500/30">
+                    <ShieldCheck className="w-8 h-8 text-emerald-400" />
                 </div>
                 <div className="space-y-2">
-                    <h3 className="text-xl font-black text-white italic tracking-tight italic">Blockchain Verification Complete</h3>
+                    <h3 className="text-xl font-black text-white italic tracking-tight italic">Audit Complete: Immutability Verified</h3>
                     <p className="text-slate-400 text-sm leading-relaxed max-w-2xl">
-                        These results are pulled directly from the decentralized ledger. Any attempt to modify the vote counts on the server side will be instantly detected and rejected by the Ethereum protocol nodes.
+                        The election session is closed. Results are locked and distributed across Ethereum nodes. No individual, admin, or government body can alter these certified counts.
                     </p>
                 </div>
             </div>

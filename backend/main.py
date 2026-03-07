@@ -12,6 +12,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from models.schemas import VoterRegistration
 from services.blockchain import BlockchainService
+from services.biometric_service import BiometricService
 import sys
 import random
 from web3 import Web3
@@ -21,6 +22,7 @@ load_dotenv()
 
 # Setup Blockchain Relayer Service
 blockchain = BlockchainService()
+biometric = BiometricService()
 
 # Initialize Firebase Admin SDK using path from .env
 service_account_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
@@ -70,6 +72,7 @@ otp_store = {}      # Aadhaar/Mobile OTPs
 email_otp_store = {} # Email OTPs
 face_registry = {}   # Simulating Face Signatures
 mock_user_profiles = {} # Temporary store for mock account overrides
+registered_aadhaars = {} # Full Aadhaar -> email mapping (Session persistence)
 
 @app.post("/api/send-email-otp")
 async def send_email_otp(email: str = Form(...)):
@@ -90,42 +93,77 @@ async def verify_email_otp(email: str = Form(...), otp: str = Form(...)):
         return {"status": "success", "message": "Email verified"}
     raise HTTPException(status_code=400, detail="Invalid Email OTP")
 
-@app.post("/api/verify-face")
-async def verify_face(
-    face_image: UploadFile = File(...),
+@app.post("/api/biometric/register")
+async def register_biometric(
+    face_image: str = Form(...),
     uid: str = Form(...)
 ):
-    # BIOMETRIC COMPARISON LOGIC:
-    # 1. We receive the live face capture from the camera.
-    # 2. We compare it against the face signature extracted from the Aadhaar Card uploaded earlier.
-    # 3. For Mock: We simulate a 98% match confidence.
     try:
-        content = await face_image.read()
-        img = Image.open(io.BytesIO(content))
+        success = biometric.register_biometric(uid, face_image)
+        return {"status": "success", "message": "Biometric registered"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/verify-face")
+async def verify_face(
+    face_image: str = Form(...),
+    uid: str = Form(...)
+):
+    try:
+        result = biometric.verify_biometric(uid, face_image)
+        if result["status"] == "success" and result["verified"]:
+            return {
+                "status": "success",
+                "verified": True,
+                "liveness": result["liveness"]
+            }
+        else:
+            raise HTTPException(status_code=401, detail=result.get("message", "Face match failed"))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/biometric/continuous-verify")
+async def continuous_verify(
+    face_image: str = Form(...),
+    uid: str = Form(...)
+):
+    """Lightning-fast liveness (Retina) check for 1-second pulses"""
+    try:
+        # We use check_liveness for high frequency updates
+        # This is much faster than verify_biometric because it skips DeepFace comparison
+        result = biometric.check_liveness(face_image, uid)
         
-        # Simulating analysis delay
-        print(f"--- FACE ANALYSIS SYSTEM ---")
-        print(f"Analyzing biometrics for UID: {uid}")
-        
-        # MOCK LOGIC: We accept any face image for now as 'verified'
-        # but we 'note' it in logs.
-        print(f"Biometric Match: 98.4% Confidence")
-        print(f"----------------------------")
-        
+        # We can occasionally inject a full identity check if we want, 
+        # but for performance, basic liveness + retina-hash is better for high-frequency.
         return {
-            "status": "success",
-            "verified": True,
-            "timestamp": "2026-03-06T15:00:00Z"
+            "status": result["status"],
+            "verified": result["status"] == "success", # In continuous mode, status success = verified presence
+            "liveness": result.get("liveness", 0),
+            "retina_hash": result.get("retina_hash", "N/A")
         }
     except Exception as e:
-        print(f"Face Biometric Error: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"Face biometric capture failed: {str(e)}")
+        return {"status": "error", "message": str(e)}
 @app.post("/api/verify-aadhaar")
 async def verify_aadhaar(
     file: UploadFile = File(...),
     aadhaar_number: str = Form(...)
 ):
     print(f"\n>>> [API] RECEIVED AADHAAR SCAN REQUEST FOR: {aadhaar_number}", file=sys.stderr, flush=True)
+    
+    # NEW: Aadhaar Uniqueness Check (Catch duplicates early)
+    if aadhaar_number in registered_aadhaars:
+        raise HTTPException(status_code=400, detail=f"Aadhaar Already Linked: This identity is already registered with {registered_aadhaars[aadhaar_number]}. Enrollment Denied.")
+
+    if db_fire:
+        # Check if any user already has this Aadhaar registered (Full or Masked)
+        existing = db_fire.collection("users").where("aadhaar", "==", aadhaar_number).limit(1).get()
+        if not existing:
+            # Fallback check for masked legacy Aadhaar
+            masked = "*" * 8 + aadhaar_number[-4:]
+            existing = db_fire.collection("users").where("aadhaar", "==", masked).limit(1).get()
+
+        if existing:
+            raise HTTPException(status_code=400, detail="Aadhaar Registry Conflict: This identity is already registered with another account.")
     
     # 1. TEST BYPASS
     if aadhaar_number in ["000000000000", "00000000000"]:
@@ -300,20 +338,66 @@ def verify_jwt(res: HTTPAuthorizationCredentials = Depends(security)):
     if token == "voter-token":
         return {"uid": "mock-voter-uid-888", "email": "voter@test.com", "role": "voter"}
         
+    
     return {"uid": "mock-firebase-uid-123", "email": "mock@example.com", "role": "admin"}
+
+@app.post("/api/admin/create-user")
+async def admin_create_user(req: AdminCreateUserRequest, current_user: dict = Depends(verify_jwt)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Unauthorized: Only admins can provision new accounts.")
+    
+    if not db_fire:
+        raise HTTPException(status_code=500, detail="Firebase Admin SDK not initialized.")
+
+    try:
+        # 1. Aadhaar Uniqueness Check
+        existing_doc = db_fire.collection("users").where("aadhaar", "==", req.aadhaar).limit(1).get()
+        if existing_doc:
+             raise HTTPException(status_code=400, detail="Identity Conflict: Aadhaar already registered.")
+
+        # 2. Create in Firebase Auth
+        new_user = auth.create_user(
+            email=req.email,
+            password=req.password,
+            display_name=f"{req.role.upper()} Internal"
+        )
+
+        # 3. Store Profile in Firestore
+        db_fire.collection("users").document(new_user.uid).set({
+            "email": req.email,
+            "role": req.role,
+            "aadhaar": req.aadhaar,
+            "isVerified": True,
+            "createdAt": firestore.SERVER_TIMESTAMP
+        })
+
+        return {"status": "success", "message": f"Successfully provisioned {req.role} account.", "uid": new_user.uid}
+    except Exception as e:
+        print(f"Admin Creation Error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/voters/register")
 def register_voter(voter: VoterRegistration, user: dict = Depends(verify_jwt)):
     if not db_fire:
-        print("Mock: Not saving to Firestore (Admin SDK not initialized)")
+        print(f"Mock: Saving Aadhaar {voter.aadhaar} for email {voter.email} to session registry.")
+        registered_aadhaars[voter.aadhaar] = voter.email
         return {"status": "mock_success", "uid": user["uid"]}
         
     try:
+        # CRITICAL: Final check for Aadhaar Uniqueness before committing to DB
+        # Check both the session-memory and the Firestore
+        if voter.aadhaar in registered_aadhaars and registered_aadhaars[voter.aadhaar] != voter.email:
+             raise HTTPException(status_code=400, detail="Aadhaar Collision: This identity is already active in a separate session.")
+
+        query = db_fire.collection("users").where("aadhaar", "==", voter.aadhaar).limit(1).get()
+        if any(doc.id != user["uid"] for doc in query):
+            raise HTTPException(status_code=400, detail="Aadhaar Collision: This identity is already linked to another email in Firestore.")
+
         user_ref = db_fire.collection("users").document(user["uid"])
         user_ref.set({
             "email": voter.email,
             "role": voter.role,
-            "aadhaar": voter.aadhaar,
+            "aadhaar": voter.aadhaar, # Full Aadhaar stored for uniqueness
             "voterId": voter.voter_id,
             "mobile": voter.mobile,
             "walletAddress": voter.wallet_address,
@@ -321,6 +405,8 @@ def register_voter(voter: VoterRegistration, user: dict = Depends(verify_jwt)):
             "verifiedAt": firestore.SERVER_TIMESTAMP,
             "createdAt": firestore.SERVER_TIMESTAMP
         })
+        # Register in session cache as well
+        registered_aadhaars[voter.aadhaar] = voter.email
         return {
             "status": "success",
             "uid": user["uid"],
@@ -370,8 +456,10 @@ def get_profile(user: dict = Depends(verify_jwt)):
         try:
             if blockchain.contract:
                 voter_hash = Web3.keccak(text=uid)
-                blockchain_voted = blockchain.contract.functions.hasVoted(voter_hash).call()
-                print(f">>> [PROFILE] BLOCKCHAIN AUDIT: Voted={blockchain_voted}", file=sys.stderr, flush=True)
+                # Ensure we check the LATEST electionId from the contract
+                curr_election_id = blockchain.contract.functions.electionId().call()
+                blockchain_voted = blockchain.contract.functions.hasVotedInElection(curr_election_id, voter_hash).call()
+                print(f">>> [PROFILE] BLOCKCHAIN AUDIT (EID:{curr_election_id}): Voted={blockchain_voted}", file=sys.stderr, flush=True)
         except Exception as be:
             print(f">>> [PROFILE] BLOCKCHAIN AUDIT ERROR (Skipping): {be}", file=sys.stderr, flush=True)
 
@@ -449,22 +537,47 @@ def get_blockchain_results():
     """Fetches real-time election results directly from Ethereum."""
     try:
         results = blockchain.get_results()
-        return {"status": "success", "results": results}
+        voting_ended = blockchain.get_voting_status()
+        return {"status": "success", "results": results, "votingEnded": voting_ended}
     except Exception as e:
         print(f"Contract Read Error: {e}")
-        return {"status": "error", "message": f"Blockchain Sync Failed: {str(e)}", "results": []}
+        return {"status": "error", "message": f"Blockchain Sync Failed: {str(e)}", "results": [], "votingEnded": False}
+
+@app.get("/api/voting-status")
+def get_voting_status():
+    return {"status": "success", "votingEnded": blockchain.get_voting_status()}
+
+@app.post("/api/end-voting")
+def end_voting(user: dict = Depends(verify_jwt)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Authority Denied: Only Admin can end the session.")
+    try:
+        tx_hash = blockchain.end_voting()
+        return {"status": "success", "txHash": tx_hash, "message": "Voting system has been immutably closed."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/start-new-election")
+def start_new_election(name: str = Form(...), user: dict = Depends(verify_jwt)):
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="Only Admin can reset the election.")
+    try:
+        tx_hash = blockchain.start_new_election(name)
+        return {"status": "success", "txHash": tx_hash, "message": f"New election '{name}' started on the ledger."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/candidates/add")
-def add_candidate_onchain(name: str = Form(...), user: dict = Depends(verify_jwt)):
+def add_candidate_onchain(name: str = Form(...), symbol: str = Form(...), user: dict = Depends(verify_jwt)):
     """Backend-signed transaction to add a candidate (Admin only)."""
     if user["role"] != "admin":
         raise HTTPException(status_code=403, detail="Authority Denied: Only Admin can add to ledger.")
     
     try:
-        tx_hash = blockchain.add_candidate(name)
+        tx_hash = blockchain.add_candidate(name, symbol)
         if not tx_hash:
             raise HTTPException(status_code=500, detail="Blockchain Service Initializing. Try again.")
-        return {"status": "success", "txHash": tx_hash, "message": f"Candidate {name} secured on blockchain."}
+        return {"status": "success", "txHash": tx_hash, "message": f"Candidate {name} ({symbol}) secured on blockchain."}
     except Exception as e:
         print(f"Blockchain Write Error: {e}")
         raise HTTPException(status_code=500, detail=f"Transaction Failed: {str(e)}")
@@ -476,6 +589,10 @@ def cast_vote_onchain(candidate_id: int = Form(...), user: dict = Depends(verify
         raise HTTPException(status_code=401, detail="Authentication required.")
 
     try:
+        # 1. Check if voting is still active
+        if blockchain.get_voting_status():
+            raise HTTPException(status_code=403, detail="Voting period has expired. No more votes can be cast.")
+
         # Pass unique User ID to ensure 1-person-1-vote on the immutable ledger
         tx_hash = blockchain.cast_vote(candidate_id, user["uid"])
         if not tx_hash:

@@ -3,11 +3,12 @@ const fs = require('fs');
 const path = require('path');
 
 async function main() {
-    const electionName = "Hackathon President 2026";
+    const electionName = "SecureVote 2026";
     const candidates = ["Alice", "Bob", "Charlie"];
+    const symbols = ["🐘", "✋", "🧹"]; // Default emojis for now
 
     const Voting = await hre.ethers.getContractFactory("VotingSystem");
-    const voting = await Voting.deploy(electionName, candidates);
+    const voting = await Voting.deploy(electionName, candidates, symbols);
 
     await voting.waitForDeployment();
     const address = await voting.getAddress();
