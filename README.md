@@ -60,7 +60,7 @@ To prevent phantom voting, a voter must prove possession of:
 graph TD
     Voter[Voter App] -->|1. Aadhaar Scan| API[FastAPI Backend]
     API -->|2. AI Check| OCR[EasyOCR Engine]
-    API -->|3. SMS/Email OTP| Twilio[Twilio/SMTP]
+    API -->|3. Email OTP[SMTP]
     API -->|4. Encrypt & Store| FB[Firebase Firestore]
     Voter -->|5. Cast Vote| API
     API -->|6. Sign & Relay| BC[Ethereum Blockchain]
