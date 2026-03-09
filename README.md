@@ -123,4 +123,4 @@ npx hardhat run scripts/deploy.js --network localhost
 This project is an **MVP (Minimum Viable Product)** built for educational and research purposes in the field of GovTech. It is not intended for use in live government elections without extensive security audits of the private key management and biometric hardware layers.
 
 ---
-*Created with ❤️ by the SecureVote Engineering Team*
+*Created and Developed by Bhavya Modi,Rudra Kahar,Mansi Jobanputra*
