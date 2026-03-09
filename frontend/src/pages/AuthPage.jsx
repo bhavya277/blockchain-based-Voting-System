@@ -110,7 +110,6 @@ const AuthPage = () => {
         formData.append('aadhaar_number', aadhaar);
 
         try {
-            console.log(`Calling verify-aadhaar at ${apiBase}/api/verify-aadhaar`);
             const response = await fetch(`${apiBase}/api/verify-aadhaar`, {
                 method: 'POST',
                 body: formData,
@@ -123,7 +122,7 @@ const AuthPage = () => {
             }
 
             setExtractedMobile(data.linkedMobile);
-            setStep(4); // Move to OTP entry (Backend handles the SMS)
+            setStep(4); // Move to OTP entry (User checks terminal/console)
         } catch (err) {
             console.error("OCR Error:", err);
             setError(`Verification Failed: ${err.message}`);
@@ -154,7 +153,6 @@ const AuthPage = () => {
         setLoading(true);
         setError('');
         try {
-            console.log("Verifying via Backend Gateway...");
             const formData = new FormData();
             formData.append('aadhaar_number', aadhaar);
             formData.append('otp', otp);
@@ -247,7 +245,7 @@ const AuthPage = () => {
             videoRef.current.srcObject = stream;
             // Ensure the video plays immediately
             videoRef.current.onloadedmetadata = () => {
-                videoRef.current.play().catch(e => console.error("Auto-play failed:", e));
+                videoRef.current.play().catch(e => {});
             };
         }
     }, [stream]);
@@ -473,7 +471,7 @@ const AuthPage = () => {
                                         )}
 
                                         <button type="button" onClick={() => simulateScanning()} disabled={verifying} className="w-full mt-4 py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition-all shadow-lg flex items-center justify-center gap-2 group">
-                                            {verifying ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Search className="w-5 h-5 group-hover:scale-110" />Start AI Verification</>}
+                                            {verifying ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Search className="w-5 h-5 group-hover:scale-110" />Start Identity Verification</>}
                                         </button>
                                     </div>
                                 )}
@@ -481,7 +479,7 @@ const AuthPage = () => {
                                 {step === 3 && (
                                     <div className="space-y-4 py-4 text-center">
                                         <Loader2 className="w-10 h-10 animate-spin text-blue-400 mx-auto" />
-                                        <p className="text-sm font-mono text-blue-400 animate-pulse">AI SCANNING BIOMETRICS...</p>
+                                        <p className="text-sm font-mono text-blue-400 animate-pulse">SCANNING BIOMETRICS...</p>
                                     </div>
                                 )}
 

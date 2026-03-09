@@ -62,7 +62,6 @@ export default function AdminDashboard() {
                 canvas.height = 120;
                 const ctx = canvas.getContext('2d');
                 // Admin Entry Security Point: Active capture
-                console.log("ADMIN IDENTITY VERIFICATION ACTIVE: Security Deterrent Scan completed.");
             } catch (e) {
                 console.error("Admin Bio Deterrent Fail:", e);
             }

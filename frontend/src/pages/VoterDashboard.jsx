@@ -142,7 +142,6 @@ export default function VoterDashboard() {
                 setVerificationStatus("SECURITY BREACH: Unauthorized Access");
             }
         } catch (err) {
-            console.error("Proctoring Sync Error:", err);
             setBiometricFailed(true);
             lockdownRef.current = true; // Fail-safe: block if network/server error occurs
         } finally {

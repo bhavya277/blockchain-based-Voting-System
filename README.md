@@ -1,8 +1,8 @@
-# SecureVote 🛡️ | Decentralized AI-Integrated Voting System
+# SecureVote 🛡️ | Decentralized Secure Voting System
 
 ![SecureVote Hero](./assets/readme_hero.png)
 
-**SecureVote** is a futuristic, decentralized, and biometrically-secured voting ecosystem. It bridges the gap between **Web3 Auditability** and **Bank-Grade Identity Privacy** by combining **Blockchain**, **Artificial Intelligence**, and **Multi-Factor Authentication**.
+**SecureVote** is a futuristic, decentralized, and biometrically-secured voting ecosystem. It bridges the gap between **Web3 Auditability** and **Bank-Grade Identity Privacy** by combining **Blockchain**, **Identity Verification**, and **Multi-Factor Authentication**.
 
 Built with a "Zero-Trust" mindset, SecureVote ensures that every vote is unique, anonymous (on-chain), and completely tamper-proof—all without requiring the average voter to manage a crypto wallet or pay for gas.
 
@@ -11,7 +11,7 @@ Built with a "Zero-Trust" mindset, SecureVote ensures that every vote is unique,
 ## 📽️ Project Vision
 Most voting systems suffer from two extremes: they are either centralized (prone to fraud) or too complex for the average user (requiring MetaMask/Wallets). **SecureVote** solves this:
 1.  **Trustless Transparency**: Every ballot is logged on the Ethereum ledger.
-2.  **AI-Verified Identity**: Integrated OCR ensures Aadhaar authenticity.
+2.  **Verifiable Identity**: Integrated OCR ensures Aadhaar authenticity.
 3.  **Privacy by Default**: Sensitive PII is protected with **AES-256 Encryption** at rest.
 
 ---
@@ -30,8 +30,8 @@ Most voting systems suffer from two extremes: they are either centralized (prone
 
 ## 🚀 Key Features
 
-### 1. 🤖 AI Aadhaar Authentication
-Uses a custom deep-learning pipeline (**EasyOCR** + **PIL**) to:
+### 1. 🛡️ Aadhaar Authentication
+Uses a custom OCR pipeline (**EasyOCR** + **PIL**) to:
 - Scan physical Aadhaar cards for 12-digit UID and linked mobile strings.
 - Compare manual user input against scanned card text (Anti-Forgery).
 - Automatically extract the voter's mobile number from the card image.
@@ -46,10 +46,9 @@ A custom-built relayer service that:
 - All sensitive identifiers (Aadhaar, Voter ID) are encrypted with **AES-256 CBC** before being saved to Firebase.
 - Decryption happens just-in-time for verification, ensuring no plaintext leaks.
 
-### 4. 🔑 Triple-Channel MFA
+### 4. 🔑 Multi-Channel MFA
 To prevent phantom voting, a voter must prove possession of:
 - Physical Identity (Aadhaar Scan).
-- Possession of Device (Twilio SMS OTP).
 - Access to Communication (Email Verification Code).
 
 ---
@@ -59,7 +58,7 @@ To prevent phantom voting, a voter must prove possession of:
 ```mermaid
 graph TD
     Voter[Voter App] -->|1. Aadhaar Scan| API[FastAPI Backend]
-    API -->|2. AI Check| OCR[EasyOCR Engine]
+    API -->|2. Identity Check| OCR[EasyOCR Engine]
     API -->|3. Email OTP[SMTP]
     API -->|4. Encrypt & Store| FB[Firebase Firestore]
     Voter -->|5. Cast Vote| API
@@ -75,7 +74,6 @@ graph TD
 - **Node.js** (v18+)
 - **Python** (3.10+)
 - **Hardhat Node** (running locally)
-- **Twilio Account** (for SMS)
 
 ### 1. Backend Configuration
 ```bash
@@ -89,10 +87,13 @@ Create a `.env` in `backend/` with:
 FIREBASE_SERVICE_ACCOUNT_PATH="firebase-adminsdk.json"
 BLOCKCHAIN_RPC_URL="http://127.0.0.1:8545"
 ADMIN_PRIVATE_KEY="0x..." # Hardhat account #0
-TWILIO_SID="AC..."
-TWILIO_AUTH_TOKEN="..."
-TWILIO_PHONE_NUMBER="+1..."
 AADHAAR_ENCRYPTION_KEY="32_char_secret_key_here"
+
+# --- EMAIL (SMTP) CONFIG ---
+SMTP_USER="your_email@gmail.com"
+SMTP_PASSWORD="your_app_password"
+SMTP_SERVER="smtp.gmail.com"
+SMTP_PORT=587
 ```
 
 ### 2. Frontend Configuration

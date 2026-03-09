@@ -138,7 +138,5 @@ class BlockchainService:
                 for r in results
             ]
         except Exception as e:
-            import traceback
             print(f"Contract Call Error: {e}")
-            traceback.print_exc()
             return []

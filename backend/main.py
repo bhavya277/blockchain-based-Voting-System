@@ -74,16 +74,13 @@ class AdminCreateUserRequest(BaseModel):
     aadhaar: str
     role: str = "voter"
 
-@app.get("/.well-known/appspecific/com.chrome.devtools.json")
-def chrome_devtools_noise():
-    return {}
-
-# Mock stores (In real apps, use Redis or Firestore)
-otp_store = {}      # Aadhaar/Mobile OTPs
-email_otp_store = {} # Email OTPs
-face_registry = {}   # Simulating Face Signatures
-mock_user_profiles = {} # Temporary store for mock account overrides
-registered_aadhaars = {} # Full Aadhaar -> email mapping (Session persistence)
+# --- IN-MEMORY SESSION STORES ---
+# Aadhaar/Mobile OTPs
+otp_store = {}      
+# Email OTPs
+email_otp_store = {} 
+# Full Aadhaar -> email mapping
+registered_aadhaars = {}
 
 @app.post("/api/send-email-otp")
 async def send_email_otp(email: str = Form(...)):
@@ -130,29 +127,6 @@ def send_real_email(to_email, subject, body):
         print(f"SMTP Error: {e}")
         return False
 
-def send_real_sms(to_mobile, body):
-    sid = os.getenv("TWILIO_SID")
-    token = os.getenv("TWILIO_AUTH_TOKEN")
-    from_no = os.getenv("TWILIO_PHONE_NUMBER")
-
-    if not sid or not token or not from_no:
-        return False
-
-    try:
-        from twilio.rest import Client
-        # Ensure number has +91 or + prefix
-        target = to_mobile if to_mobile.startswith("+") else (to_mobile if to_mobile.startswith("+91") else f"+91{to_mobile}")
-        client = Client(sid, token)
-        message = client.messages.create(
-            body=body,
-            from_=from_no,
-            to=target
-        )
-        return True
-    except Exception as e:
-        sys.stderr.write(f"\n[!!] TWILIO GATEWAY ERROR: {str(e)}\n")
-        sys.stderr.flush()
-        return False
 
 @app.post("/api/verify-email-otp")
 async def verify_email_otp(email: str = Form(...), otp: str = Form(...)):
@@ -301,7 +275,7 @@ async def verify_aadhaar(
                 extracted_no = all_12_digits[0]
         else:
              print("!!! OCR ERROR: No 12-digit Aadhaar pattern detected.", file=sys.stderr, flush=True)
-             raise HTTPException(status_code=400, detail="The AI could not clearly find a 12-digit Aadhaar number. Please use a clearer image.")
+             raise HTTPException(status_code=400, detail="The scanner could not clearly find a 12-digit Aadhaar number. Please use a clearer image.")
         
         if extracted_no != aadhaar_number:
             print(f"!!! SECURITY MISMATCH: Entered: {aadhaar_number} vs Scanned: {extracted_no}", file=sys.stderr, flush=True)
@@ -334,45 +308,28 @@ async def verify_aadhaar(
         otp = str(random.randint(100000, 999999))
         otp_store[aadhaar_number] = otp
         
-        # Delivery 1: Physical SMS (Twilio) - Occurs immediately as a primary/secondary delivery
-        sms_success = send_real_sms(
-            to_mobile=mobile_no,
-            body=f"Your SecureVote Identity Verification Code is: {otp}. Valid for 10 minutes."
-        )
-
-        sys.stderr.write("\n" + "█"*60 + "\n")
         sys.stderr.write(f"  CRITICAL: VOTER OTP GENERATED (BACKEND GATEWAY)\n")
         sys.stderr.write(f"  PHONE: +91 {mobile_no}\n")
         sys.stderr.write(f"  OTP:   {otp}\n")
-        if not sms_success:
-            sys.stderr.write(f"  [GATEWAY] Twilio SMS Failed or Not Configured.\n")
-        else:
-            sys.stderr.write(f"  [GATEWAY] Backend SMS Dispatched via Twilio.\n")
-        sys.stderr.write("█"*60 + "\n\n")
         sys.stderr.flush()
 
         # Delivering highly sensitive data encrypted
         encrypted_aadhaar = encryptor.encrypt(extracted_no)
         
-        print(f"DEBUG: Preparing Final Response for {aadhaar_number} (Encrypted)", file=sys.stderr, flush=True)
         response_data = {
             "status": "verified",
             "extractedAadhaar": encrypted_aadhaar, 
             "linkedMobile": f"xxxxxx{mobile_no[-4:]}",
             "fullMobile": mobile_no,
-            "backendOtpSent": sms_success,
+            "backendOtpSent": False,
             "message": "Identity Linked. Verification initiated."
         }
-        print(f"DEBUG: Returning JSON: {response_data}", file=sys.stderr, flush=True)
         return response_data
     except HTTPException:
         raise
     except Exception as e:
-        import traceback
-        traceback_str = traceback.format_exc()
-        print(f"!!! CRITICAL EXCEPTION TYPE: {type(e).__name__} !!!", file=sys.stderr, flush=True)
-        print(f"CRITICAL OCR FAILURE:\n{traceback_str}", file=sys.stderr, flush=True)
-        raise HTTPException(status_code=500, detail=f"AI Engine Error [{type(e).__name__}]: {str(e)}")
+        sys.stderr.write(f"!!! CRITICAL OCR FAILURE in verify_aadhaar: {str(e)}\n")
+        raise HTTPException(status_code=500, detail=f"Identity Engine Error: {str(e)}")
 
 @app.post("/api/verify-otp")
 async def verify_otp(
@@ -510,33 +467,8 @@ def get_profile(user: dict = Depends(verify_jwt)):
     email = user.get("email")
     print(f"\n>>> [PROFILE] FETCHING FOR: {email} (UID: {uid})", file=sys.stderr, flush=True)
 
-    # SUPER-ADMIN MOCK
-    if uid in ["mock-firebase-uid-123", "mock-admin-uid-999"] or email == "admin@test.com":
-        mock_overrides = mock_user_profiles.get(uid, {})
-        return {
-            "uid": uid,
-            "email": email,
-            "role": "admin",
-            "aadhaar": "1234 5678 9012",
-            "mobile": "9999888877",
-            "walletAddress": mock_overrides.get("walletAddress", "not-connected"),
-            "hasVoted": False,
-            "isMock": True
-        }
-        
     if not db_fire:
-        print(">>> [PROFILE] FIREBASE DOWN - RETURNING MOCK", file=sys.stderr, flush=True)
-        mock_overrides = mock_user_profiles.get(uid, {})
-        return {
-            "uid": uid, 
-            "email": email, 
-            "role": "voter", 
-            "aadhaar": "**** **** 0000",
-            "mobile": "xxxxxx0000",
-            "walletAddress": mock_overrides.get("walletAddress", "not-connected"),
-            "hasVoted": False,
-            "isMock": True
-        }
+        raise HTTPException(status_code=500, detail="Database Unavailable")
         
     try:
         # 1. Check if user already voted on the Blockchain (Live Audit)
@@ -555,11 +487,6 @@ def get_profile(user: dict = Depends(verify_jwt)):
         if user_doc.exists:
             profile_data = user_doc.to_dict()
             profile_data["hasVoted"] = blockchain_voted
-            # Check for mock memory overrides first (for testing)
-            mock_overrides = mock_user_profiles.get(uid, {})
-            if "walletAddress" in mock_overrides:
-                profile_data["walletAddress"] = mock_overrides["walletAddress"]
-            print(f">>> [PROFILE] LOADED FROM FIRESTORE", file=sys.stderr, flush=True)
             
             # Decrypt Aadhaar for the response
             profile_data["aadhaar"] = encryptor.decrypt(profile_data.get("aadhaar", ""))
@@ -589,7 +516,6 @@ def get_profile(user: dict = Depends(verify_jwt)):
 @app.post("/api/users/link-wallet")
 def link_wallet(wallet_address: str = Form(...), user: dict = Depends(verify_jwt)):
     try:
-        print(f"--- Wallet Link Request ---")
         print(f"User: {user}")
         print(f"Wallet: {wallet_address}")
         
@@ -616,10 +542,8 @@ def link_wallet(wallet_address: str = Form(...), user: dict = Depends(verify_jwt
             "message": f"Wallet {wallet_address} linked and verified on backend."
         }
     except Exception as e:
-        import traceback
-        print(f"Wallet Linking CRASH: {str(e)}")
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Critical Backend Error: {str(e)}")
+        print(f"Wallet Linking Error: {str(e)}")
+        raise HTTPException(status_code=500, detail="Database failure while linking wallet.")
 
 # --- SECURE BLOCKCHAIN RELAYER ENDPOINTS ---
 # No more MetaMask needed; we sign on the backend.
